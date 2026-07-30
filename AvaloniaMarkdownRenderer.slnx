@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/AvaloniaMarkdown.Benchmarks/AvaloniaMarkdown.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/AvaloniaMarkdown.Demo/AvaloniaMarkdown.Demo.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/AvaloniaMarkdown/AvaloniaMarkdown.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AvaloniaMarkdown.Tests/AvaloniaMarkdown.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>AvaloniaMarkdown</RootNamespace>
+    <AssemblyName>AvaloniaMarkdown</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <PackageId>AvaloniaMarkdown</PackageId>
+    <Description>High-performance streaming GitHub-Flavored Markdown renderer for Avalonia.</Description>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AvaloniaMarkdown.Tests" />
+    <InternalsVisibleTo Include="AvaloniaMarkdown.Benchmarks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Themes/**/*.axaml" />
+  </ItemGroup>
+
+</Project>
