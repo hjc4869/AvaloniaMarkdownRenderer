@@ -23,6 +23,9 @@ public sealed class MainWindow : Window
     private MarkdownDocument _document = new();
     private CancellationTokenSource? _streamCancellation;
     private long _appendCount;
+    private long _lastStatsAppendCount;
+    private long _lastStatsTicks;
+    private double _tokensPerSecondActual;
     private double _appendMicrosecondsTotal;
     private double _appendMicrosecondsMax;
 
@@ -70,7 +73,7 @@ public sealed class MainWindow : Window
         themeButton.Click += (_, _) => ApplyTheme(
             ReferenceEquals(_markdownView.MarkdownTheme, MarkdownTheme.Dark) ? MarkdownTheme.Light : MarkdownTheme.Dark);
 
-        _speedSlider = new Slider { Minimum = 1, Maximum = 500, Value = 60, Width = 160 };
+        _speedSlider = new Slider { Minimum = 1, Maximum = 20_000, Value = 60, Width = 160 };
         _speedSlider.PropertyChanged += (_, e) =>
         {
             if (e.Property == RangeBase.ValueProperty)
@@ -134,6 +137,9 @@ public sealed class MainWindow : Window
     {
         _streamCancellation?.Cancel();
         _appendCount = 0;
+        _lastStatsAppendCount = 0;
+        _lastStatsTicks = 0;
+        _tokensPerSecondActual = 0;
         _appendMicrosecondsTotal = 0;
         _appendMicrosecondsMax = 0;
         _streamError = null;
@@ -164,39 +170,71 @@ public sealed class MainWindow : Window
     /// Simulates an LLM token stream on a background thread. The sample text is repeated
     /// indefinitely (separated by a horizontal rule) until the user stops the stream.
     /// </summary>
+    /// <remarks>
+    /// The loop is paced by a fixed tick and emits every token that has fallen due since the last
+    /// one, rather than sleeping between individual tokens. <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
+    /// truncates its argument to whole milliseconds, so a per-token delay caps the achievable rate
+    /// at the timer resolution and, above 1000 tokens/s, degenerates into <c>Task.Delay(0)</c>,
+    /// which completes synchronously: the loop then never yields and floods both the document
+    /// queue and the UI dispatcher, which looks exactly like a hang.
+    /// </remarks>
     private async Task StreamAsync(string text, CancellationToken cancellationToken)
     {
         const string RepeatSeparator = "\n\n---\n\n";
+        const int MaxTokensPerTick = 4096;
+        TimeSpan tick = TimeSpan.FromMilliseconds(8);
 
         MarkdownDocument document = _document;
         int index = 0;
         var stopwatch = new Stopwatch();
+        var clock = Stopwatch.StartNew();
+        TimeSpan lastTick = clock.Elapsed;
+        double dueTokens = 0;
 
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (index >= text.Length)
+                await Task.Delay(tick, cancellationToken).ConfigureAwait(false);
+
+                TimeSpan now = clock.Elapsed;
+                dueTokens += (now - lastTick).TotalSeconds * Math.Max(1, _tokensPerSecond);
+                lastTick = now;
+
+                int tokens = (int)dueTokens;
+                if (tokens > MaxTokensPerTick)
                 {
-                    document.Append(RepeatSeparator);
-                    index = 0;
+                    // The engine cannot keep up with the requested rate; drop the backlog instead
+                    // of letting it accumulate into ever larger bursts.
+                    tokens = MaxTokensPerTick;
+                    dueTokens = 0;
+                }
+                else
+                {
+                    dueTokens -= tokens;
                 }
 
-                int length = Math.Min(Random.Shared.Next(2, 9), text.Length - index);
-                string chunk = text.Substring(index, length);
-                index += length;
+                for (int i = 0; i < tokens; i++)
+                {
+                    if (index >= text.Length)
+                    {
+                        document.Append(RepeatSeparator);
+                        index = 0;
+                    }
 
-                stopwatch.Restart();
-                document.Append(chunk);
-                stopwatch.Stop();
+                    int length = Math.Min(Random.Shared.Next(2, 9), text.Length - index);
+                    string chunk = text.Substring(index, length);
+                    index += length;
 
-                double microseconds = stopwatch.Elapsed.TotalMilliseconds * 1000;
-                _appendCount++;
-                _appendMicrosecondsTotal += microseconds;
-                _appendMicrosecondsMax = Math.Max(_appendMicrosecondsMax, microseconds);
+                    stopwatch.Restart();
+                    document.Append(chunk);
+                    stopwatch.Stop();
 
-                double tokensPerSecond = Math.Max(1, _tokensPerSecond);
-                await Task.Delay(TimeSpan.FromSeconds(1 / tokensPerSecond), cancellationToken).ConfigureAwait(false);
+                    double microseconds = stopwatch.Elapsed.TotalMilliseconds * 1000;
+                    _appendCount++;
+                    _appendMicrosecondsTotal += microseconds;
+                    _appendMicrosecondsMax = Math.Max(_appendMicrosecondsMax, microseconds);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -242,7 +280,18 @@ public sealed class MainWindow : Window
         int realized = _markdownView.Panel.RealizedCount;
         double average = _appendCount == 0 ? 0 : _appendMicrosecondsTotal / _appendCount;
 
+        long now = Environment.TickCount64;
+        long elapsed = now - _lastStatsTicks;
+        if (_lastStatsTicks != 0 && elapsed > 0)
+        {
+            _tokensPerSecondActual = (_appendCount - _lastStatsAppendCount) * 1000.0 / elapsed;
+        }
+
+        _lastStatsTicks = now;
+        _lastStatsAppendCount = _appendCount;
+
         _stats.Text =
+            $"tok/s {_tokensPerSecondActual,6:N0}/{_tokensPerSecond,-6:N0}   " +
             $"blocks {total,7:N0}   realized {realized,3}   " +
             $"append avg {average,6:F1} us   max {_appendMicrosecondsMax,7:F1} us   " +
             $"managed {GC.GetTotalMemory(false) / (1024 * 1024),4:N0} MB   gc0 {GC.CollectionCount(0)}" +

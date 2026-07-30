@@ -76,6 +76,7 @@ public class MarkdownView : Decorator, IMarkdownHost
     private long _lastScrollTicks;
     private long _lastFlushTicks;
     private long _pendingSinceTicks;
+    private int _wakeupPosted;
     private double _programmaticOffsetY = double.NaN;
     private bool _pinnedToEnd = true;
 
@@ -272,14 +273,19 @@ public class MarkdownView : Decorator, IMarkdownHost
 
             Flush();
         }
-        else
+        else if (Interlocked.CompareExchange(ref _wakeupPosted, 1, 0) == 0)
         {
+            // A single wakeup is enough: the snapshot is already visible in _pending and the flush
+            // timer keeps ticking. Posting per snapshot would let a fast producer fill the
+            // dispatcher queue with render-priority work items and starve input handling.
             Dispatcher.UIThread.Post(static state => ((MarkdownView)state!).StartTimer(), this, DispatcherPriority.Render);
         }
     }
 
     private void StartTimer()
     {
+        Volatile.Write(ref _wakeupPosted, 0);
+
         if (!_flushTimer.IsEnabled)
         {
             _flushTimer.Start();
